@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json.schemastore.org/eslintrc",
+  "env": {
+    "node": true
+  },
+  "parser": "@babel/eslint-parser",
+  "extends": [
+    "standard"
+  ],
+  "rules": {
+    "semi": ["warn", "always"]
+  }
+}

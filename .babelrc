@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/babelrc",
+  "targets": {
+    "node": "6"
+  },
+  "presets": [
+    [
+      "@babel/preset-env",
+      {
+        "useBuiltIns": "usage",
+        "corejs": "3"
+      }
+    ]
+  ]
+}
