@@ -10,13 +10,18 @@ class Crawler {
   async startCrawling () {
     // const cates = await this.#crawlCates();
     // this.#fileWriteJSON('categories.json', cates);
-    // console.log('Done crawling categories');
+    console.log('Done crawling categories');
 
+    // const indexes = await this.#fileReadJSON('indexes.json');
     const indexes = await this.#crawlIndexes();
     this.#fileWriteJSON('indexes.json', indexes);
     console.log('Done crawling indexes');
 
-    console.log(indexes);
+    // const books = await this.#crawlBooks(indexes);
+    // this.#fileWriteJSON('books.json', books);
+    const books = await this.#fileReadJSON('books.json');
+    console.log('Done crawling books');
+    console.log(books);
   }
 
   async #crawlCates () {
@@ -36,30 +41,77 @@ class Crawler {
 
   async #crawlIndexes () {
     const indexes = [];
-    const maxPage = 1; // for debugging
+    const workerCount = 32;
+    const maxPage = Number.MAX_VALUE; // set to a lower value for debugging
 
-    for (let page = 1; ; page++) {
-      const $ = await fetchAndLoad(`${TargetBase}/tat-ca-sach/page/${page}`);
-      const elems = $('.item_sach').toArray();
+    let pageCounter = 0;
+    await Promise.all(Array(workerCount).fill().map(async () => {
+      while (true) {
+        const page = ++pageCounter;
+        console.log(`Crawling indexes of page ${page}`);
+        const $ = await fetchAndLoad(`${TargetBase}/tat-ca-sach/page/${page}`);
+        const elems = $('.item_sach').toArray();
 
-      if (!elems.length || page > maxPage) {
-        break;
+        if (!elems.length || page > maxPage) {
+          console.log('Worker exiting...');
+
+          return;
+        }
+
+        indexes.push(...elems.map(el => ({
+          slug: $(el).find('a').attr('href').replace(/^.*\/(.*)\.html$/i, '$1'),
+          title: $(el).find('h4').text(),
+          // thumbnailUrl: this.#normalizeUrl($(el).find('img.medium_thum').attr('src'))
+        })));
       }
-
-      indexes.push(...elems.map(el => {
-        const slug = $(el).find('a').attr('href').replace(/^.*\/(.*)\.html$/i, '$1');
-        const title = $(el).find('h4').text();
-        const thumbnailUrl = new URL($(el).find('img.medium_thum').attr('src'), TargetBase).toString();
-
-        return {
-          slug,
-          title,
-          thumbnailUrl
-        };
-      }));
-    }
+    }));
 
     return indexes;
+  }
+
+  async #crawlBooks (indexes) {
+    const workerCount = 32;
+    const jobs = [...indexes];
+    const books = [];
+
+    await Promise.all(Array(workerCount).fill().map(async () => {
+      while (true) {
+        const job = jobs.splice(0, 1)[0];
+        if (!job) {
+          console.log('Worker exiting...');
+          return;
+        }
+
+        console.log(`Crawling book: ${job.title} (${jobs.length} left)`);
+        const $ = await fetchAndLoad(`${TargetBase}/${job.slug}.html`);
+
+        const book = {
+          title: $('h1.tblue').text(),
+          category: $('a.tblue').attr('href').replace(/^.*\/(.*)$/, '$1'),
+          thumbnailUrl: this.#normalizeUrl($('.content_page img').attr('src')),
+          resources: {}
+        };
+
+        const $btns = $('.button');
+        $btns.toArray().forEach($btn => {
+          const type = $btn.attribs.class.split(/\s+/).filter(it => it && it !== 'button')[0];
+
+          if (!type) {
+            throw new Error('Unknown type', $btn.attribs.class);
+          }
+
+          book.resources[type] = this.#normalizeUrl($btn.attribs.href);
+        });
+
+        books.push(book);
+
+        // if (Math.PI) {
+        //   return;
+        // }
+      }
+    }));
+
+    return books;
   }
 
   async #fileWriteBin (filePath, data) {
@@ -74,7 +126,12 @@ class Crawler {
 
   async #fileReadJSON (filePath) {
     const actualPath = path.join(DataDir, filePath);
+
     return JSON.parse(await fs.readFile(actualPath));
+  }
+
+  #normalizeUrl (rawUrl) {
+    return new URL(rawUrl, TargetBase).toString();
   }
 };
 

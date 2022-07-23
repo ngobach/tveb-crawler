@@ -8,7 +8,9 @@ async function main () {
   try {
     await (new Crawler()).startCrawling();
   } catch (error) {
+    console.error(error.message);
     log(error);
+    process.exit(1);
   }
 }
 
