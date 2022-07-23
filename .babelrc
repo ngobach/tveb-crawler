@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/babelrc",
   "targets": {
-    "node": "6"
+    "node": "current"
   },
   "presets": [
     [
