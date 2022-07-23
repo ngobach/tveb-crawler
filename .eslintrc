@@ -9,6 +9,7 @@
   ],
   "rules": {
     "semi": ["warn", "always"],
-    "quotes": ["warn", "single"]
+    "quotes": ["warn", "single"],
+    "comma-dangle": ["warn", "always-multiline"]
   }
 }
