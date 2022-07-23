@@ -3,12 +3,20 @@ import fs from 'fs/promises';
 import { fetchAndLoad } from './utils';
 
 const TargetBase = 'https://nhasachmienphi.com';
+
 const DataDir = path.join(process.cwd(), 'data');
 
 class Crawler {
   async startCrawling () {
-    const cates = await this.#crawlCates();
-    this.#fileWriteJSON('categories.json', cates);
+    // const cates = await this.#crawlCates();
+    // this.#fileWriteJSON('categories.json', cates);
+    // console.log('Done crawling categories');
+
+    const indexes = await this.#crawlIndexes();
+    this.#fileWriteJSON('indexes.json', indexes);
+    console.log('Done crawling indexes');
+
+    console.log(indexes);
   }
 
   async #crawlCates () {
@@ -24,6 +32,34 @@ class Crawler {
     });
 
     return cates;
+  }
+
+  async #crawlIndexes () {
+    const indexes = [];
+    const maxPage = 1; // for debugging
+
+    for (let page = 1; ; page++) {
+      const $ = await fetchAndLoad(`${TargetBase}/tat-ca-sach/page/${page}`);
+      const elems = $('.item_sach').toArray();
+
+      if (!elems.length || page > maxPage) {
+        break;
+      }
+
+      indexes.push(...elems.map(el => {
+        const slug = $(el).find('a').attr('href').replace(/^.*\/(.*)\.html$/i, '$1');
+        const title = $(el).find('h4').text();
+        const thumbnailUrl = new URL($(el).find('img.medium_thum').attr('src'), TargetBase).toString();
+
+        return {
+          slug,
+          title,
+          thumbnailUrl
+        };
+      }));
+    }
+
+    return indexes;
   }
 
   async #fileWriteBin (filePath, data) {

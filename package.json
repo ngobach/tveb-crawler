@@ -5,8 +5,9 @@
   "license": "MIT",
   "private": true,
   "scripts": {
+    "clean": "rm -rf dist data",
     "dev": "DEBUG=crawler:* babel-node src/index.js",
-    "build": "rm -rf dist && babel -D -d dist src",
+    "build": "yarn clean && babel -D -d dist src",
     "lint": "eslint src"
   },
   "devDependencies": {
