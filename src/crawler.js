@@ -1,6 +1,6 @@
 import path from 'path';
 import fs from 'fs/promises';
-import puppeteer from 'puppeteer';
+import asyncPool from 'tiny-async-pool';
 import { fetchAndLoad } from './utils';
 
 const TargetBase = 'https://nhasachmienphi.com';
@@ -8,39 +8,32 @@ const TargetBase = 'https://nhasachmienphi.com';
 const DataDir = path.join(process.cwd(), 'data');
 
 class Crawler {
-  /**
-   * @type {puppeteer.Browser}
-   */
-  #browser = null;
-
   async startCrawling () {
     if (!await this.#fileExists('categories.json')) {
-      this.#fileWriteJSON('categories.json', await this.#crawlCates());
+      await this.#fileWriteJSON('categories.json', await this.#crawlCates());
       console.log('Done crawling categories');
     }
     // const categories = this.#fileReadJSON('categories.json');
 
     if (!await this.#fileExists('indexes.json')) {
-      this.#fileWriteJSON('indexes.json', await this.#crawlIndexes());
+      await this.#fileWriteJSON('indexes.json', await this.#crawlIndexes());
       console.log('Done crawling indexes');
     }
     const indexes = await this.#fileReadJSON('indexes.json');
 
     if (!await this.#fileExists('books_raw.json')) {
-      this.#fileWriteJSON('books_raw.json', await this.#crawlBooks(indexes));
+      await this.#fileWriteJSON('books_raw.json', await this.#crawlBooks(indexes));
       console.log('Done crawling books');
     }
     const rawBooks = await this.#fileReadJSON('books_raw.json');
 
-    this.#browser = await puppeteer.launch();
+    if (!await this.#fileExists('books.json')) {
+      await this.#fileWriteJSON('books.json', await this.#ripBooks(rawBooks));
+      console.log('Done ripping books');
+    }
 
-    // if (!await this.#fileExists('books.json')) {
-    // this.#fileWriteJSON('books.json', await this.#ripBooks(rawBooks.slice(0, 2)));
-    // console.log('Done ripping books');
-    // }
-
-    await this.#ripUrl('https://nhasachmienphi.com/doc-online/truyen-tranh-loc-dinh-ky-326474', 'foo-bar', 'foo-bar');
-    await this.#browser.close();
+    // @WARN: testing
+    // await this.#ripUrl('https://nhasachmienphi.com/doc-online/truyen-tranh-loc-dinh-ky-326474', 'foo-bar', 'foo-bar');
   }
 
   async #crawlCates () {
@@ -88,65 +81,71 @@ class Crawler {
   }
 
   async #crawlBooks (indexes) {
-    const workerCount = 32;
-    const jobs = [...indexes];
     const books = [];
 
-    await Promise.all(Array(workerCount).fill().map(async () => {
-      while (true) {
-        const job = jobs.splice(0, 1)[0];
-        if (!job) {
-          console.log('Worker exiting...');
-          return;
+    const crawlBook = async job => {
+      const $ = await fetchAndLoad(`${TargetBase}/${job.slug}.html`);
+
+      const book = {
+        title: $('h1.tblue').text(),
+        slug: job.slug,
+        category: $('a.tblue').attr('href').replace(/^.*\/(.*)$/, '$1'),
+        thumbnailUrl: this.#normalizeUrl($('.content_page img').attr('src')),
+        resources: {},
+      };
+
+      const $btns = $('.button');
+      $btns.toArray().forEach($btn => {
+        const type = $btn.attribs.class.split(/\s+/).filter(it => it && it !== 'button')[0];
+
+        if (!type) {
+          throw new Error('Unknown type', $btn.attribs.class);
         }
 
-        console.log(`Crawling book: ${job.title} (${jobs.length} left)`);
-        const $ = await fetchAndLoad(`${TargetBase}/${job.slug}.html`);
+        book.resources[type] = this.#normalizeUrl($btn.attribs.href);
+      });
 
-        const book = {
-          title: $('h1.tblue').text(),
-          category: $('a.tblue').attr('href').replace(/^.*\/(.*)$/, '$1'),
-          thumbnailUrl: this.#normalizeUrl($('.content_page img').attr('src')),
-          resources: {},
-        };
+      return book;
+    };
 
-        const $btns = $('.button');
-        $btns.toArray().forEach($btn => {
-          const type = $btn.attribs.class.split(/\s+/).filter(it => it && it !== 'button')[0];
-
-          if (!type) {
-            throw new Error('Unknown type', $btn.attribs.class);
-          }
-
-          book.resources[type] = this.#normalizeUrl($btn.attribs.href);
-        });
-
-        books.push(book);
-
-        // if (Math.PI) {
-        //   return;
-        // }
-      }
-    }));
+    let counter = 0;
+    for await (const book of asyncPool(32, indexes, crawlBook)) {
+      books.push(book);
+      counter++;
+      console.log(`Crawled book: ${book.title} (${indexes.length - counter} left)`);
+    }
 
     return books;
   }
 
   async #ripBooks (rawBooks) {
-    const workerCount = 2;
-    const jobs = Object.entries(rawBooks);
-    const books = { length: 0 };
+    const books = [];
 
-    await Promise.all(Array.from({ length: workerCount }).map(async () => {
-      const [idx, rawBook] = jobs.splice(0, 1)[0] ?? [];
-      if (idx === undefined) {
-        console.log('Worker exiting...');
+    const ripBook = async rawBook => {
+      const book = JSON.parse(JSON.stringify(rawBook));
+
+      if (book.thumbnailUrl) {
+        book.thumbnailUrl = await this.#ripUrl(book.thumbnailUrl, book.slug, `${book.slug}_thumbnail`);
       }
 
-      console.log(rawBook);
-    }));
+      for (const type of Object.keys(book.resources)) {
+        book.resources[type] = await this.#ripUrl(book.resources[type], book.slug, book.slug);
+        if (!book.resources[type]) {
+          delete book.resources[type];
+        }
+      }
 
-    return Array.from(books);
+      return book;
+    };
+
+    let counter = 0;
+    for await (const book of asyncPool(32, rawBooks, ripBook)) {
+      books.push(book);
+      counter++;
+      console.log(`Crawled book: ${book.title} (${rawBooks.length - counter} left)`);
+    }
+
+    return books;
   }
 
   async #ripUrl (url, outputPath, basename) {
@@ -157,15 +156,20 @@ class Crawler {
       // Convert to PDF
       // const response = await fetch(url);
       // // const html = await response.text();
-      const page = await this.#browser.newPage();
-      await page.goto(url, { waitUntil: 'load' });
-      await page.setContent((await page.$eval('.content_p', e => e.innerHTML)));
-      await this.#fileWriteBin(path.join(outputPath, `${basename}_online.pdf`), await page.createPDFStream());
-      await page.close();
+      // const page = await this.#browser.newPage();
+      // await page.goto(url, { waitUntil: 'load' });
+      // await page.setContent((await page.$eval('.content_p', e => e.innerHTML)));
+      // await this.#fileWriteBin(path.join(outputPath, `${basename}_online.pdf`), await page.createPDFStream());
+      // await page.close();
+      // @TODO
+      return null;
     } else {
       const ext = url.match(/^.*\.(.{1,4})$/)?.[1] ?? `_${Math.random().toString(36).substring(2)}.bin`;
       const response = await fetch(url);
-      await this.#fileWriteBin(path.join(outputPath, `${basename}.${ext}`), response.body);
+      const outputFile = path.join(outputPath, `${basename}.${ext}`);
+      await this.#fileWriteBin(outputFile, response.body);
+
+      return outputFile;
     }
   }
 
